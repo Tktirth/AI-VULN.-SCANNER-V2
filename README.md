@@ -131,3 +131,6 @@ Only scan targets you own or have written permission to test.
 
 **Tirth** — IT undergrad at GTU, IIT Delhi ethical hacking certified, IIT Guwahati AI/ML track.  
 GitHub: [@Tktirth](https://github.com/Tktirth)
+
+## 📜 License
+This project is licensed under the MIT License.
