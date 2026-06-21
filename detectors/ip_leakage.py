@@ -106,25 +106,9 @@ def detect_ip_leakage(
     request_manager: Any,
     scanned_urls: List[str],
 ) -> List[Dict[str, Any]]:
-    """Scan *scanned_urls* for leaked internal IPs and hostnames.
-
-    Parameters
-    ----------
-    target_url:
-        The base/target URL of the scan.
-    request_manager:
-        A ``RequestManager`` whose ``.get(url)`` returns
-        ``Optional[requests.Response]``.
-    scanned_urls:
-        Previously-crawled URLs to inspect.
-
-    Returns
-    -------
-    list[dict]
-        Each dict follows the project's universal vulnerability format.
-    """
+    """Scan *scanned_urls* for leaked internal IPs and hostnames."""
     findings: List[Dict[str, Any]] = []
-    seen: Set[Tuple[str, str]] = set()  # (ip_or_hostname, category)
+    seen: Set[str] = set()  # Deduplicate globally by IP or hostname
 
     try:
         # Source 1 — HTTP response headers
@@ -159,7 +143,7 @@ def detect_ip_leakage(
 def _scan_headers(
     urls: List[str],
     request_manager: Any,
-    seen: Set[Tuple[str, str]],
+    seen: Set[str],
 ) -> List[Dict[str, Any]]:
     """Check response headers for private IPs / internal hostnames."""
     findings: List[Dict[str, Any]] = []
@@ -179,10 +163,9 @@ def _scan_headers(
                         match = pat.search(value)
                         if match:
                             ip = match.group(0)
-                            key = (ip, "header")
-                            if key in seen:
+                            if ip in seen:
                                 continue
-                            seen.add(key)
+                            seen.add(ip)
                             findings.append(_build_finding(
                                 url=url,
                                 parameter=header_name,
@@ -196,18 +179,18 @@ def _scan_headers(
                     hostname_match = _INTERNAL_HOSTNAME_PATTERN.search(value)
                     if hostname_match:
                         hn = hostname_match.group(0)
-                        key = (hn, "header")
-                        if key not in seen:
-                            seen.add(key)
-                            findings.append(_build_finding(
-                                url=url,
-                                parameter=header_name,
-                                evidence=f"{header_name}: {value}",
-                                description=(
-                                    f"Internal hostname '{hn}' leaked via "
-                                    f"HTTP response header '{header_name}'."
-                                ),
-                            ))
+                        if hn in seen:
+                            continue
+                        seen.add(hn)
+                        findings.append(_build_finding(
+                            url=url,
+                            parameter=header_name,
+                            evidence=f"{header_name}: {value}",
+                            description=(
+                                f"Internal hostname '{hn}' leaked via "
+                                f"HTTP response header '{header_name}'."
+                            ),
+                        ))
             except Exception as exc:
                 logger.debug("Header scan error [%s]: %s", url, exc)
     except Exception as exc:
@@ -222,7 +205,7 @@ def _scan_headers(
 def _scan_html_bodies(
     urls: List[str],
     request_manager: Any,
-    seen: Set[Tuple[str, str]],
+    seen: Set[str],
 ) -> List[Dict[str, Any]]:
     """Check HTML bodies and comments for private IPs."""
     findings: List[Dict[str, Any]] = []
@@ -245,10 +228,9 @@ def _scan_html_bodies(
                         if unique_count >= 5:
                             break
                         ip = match.group(0)
-                        key = (ip, "html")
-                        if key in seen:
+                        if ip in seen:
                             continue
-                        seen.add(key)
+                        seen.add(ip)
                         unique_count += 1
                         start = max(0, match.start() - 50)
                         end = min(len(html), match.end() + 50)
@@ -270,10 +252,9 @@ def _scan_html_bodies(
                         match = pat.search(comment)
                         if match:
                             ip = match.group(0)
-                            key = (ip, "html")
-                            if key in seen:
+                            if ip in seen:
                                 continue
-                            seen.add(key)
+                            seen.add(ip)
                             snippet = comment[:100].replace("\n", " ").strip()
                             findings.append(_build_finding(
                                 url=url,
@@ -291,22 +272,22 @@ def _scan_html_bodies(
                     hostname_match = _INTERNAL_HOSTNAME_PATTERN.search(comment)
                     if hostname_match:
                         hn = hostname_match.group(0)
-                        key = (hn, "html")
-                        if key not in seen:
-                            seen.add(key)
-                            snippet = comment[:100].replace("\n", " ").strip()
-                            findings.append(_build_finding(
-                                url=url,
-                                parameter="html_body",
-                                evidence=(
-                                    f"Hostname '{hn}' in HTML comment: "
-                                    f"<!--{snippet}-->"
-                                ),
-                                description=(
-                                    f"Internal hostname '{hn}' leaked "
-                                    f"inside an HTML comment on {url}."
-                                ),
-                            ))
+                        if hn in seen:
+                            continue
+                        seen.add(hn)
+                        snippet = comment[:100].replace("\n", " ").strip()
+                        findings.append(_build_finding(
+                            url=url,
+                            parameter="html_body",
+                            evidence=(
+                                f"Hostname '{hn}' in HTML comment: "
+                                f"<!--{snippet}-->"
+                            ),
+                            description=(
+                                f"Internal hostname '{hn}' leaked "
+                                f"inside an HTML comment on {url}."
+                            ),
+                        ))
             except Exception as exc:
                 logger.debug("HTML body scan error [%s]: %s", url, exc)
     except Exception as exc:
@@ -321,9 +302,10 @@ def _scan_html_bodies(
 def _scan_javascript(
     urls: List[str],
     request_manager: Any,
-    seen: Set[Tuple[str, str]],
+    seen: Set[str],
 ) -> List[Dict[str, Any]]:
     """Extract <script src> URLs from HTML pages, fetch, and scan."""
+    import requests
     findings: List[Dict[str, Any]] = []
     try:
         js_urls: Set[str] = set()
@@ -349,19 +331,34 @@ def _scan_javascript(
         # Fetch and scan each unique JS file (cap 20)
         for js_url in list(js_urls)[:20]:
             try:
-                resp = request_manager.get(js_url)
-                if resp is None:
+                js_text = ""
+                try:
+                    session = request_manager.session if hasattr(request_manager, "session") else requests.Session()
+                    with session.get(js_url, stream=True, verify=False, timeout=8) as r:
+                        if r.status_code == 200:
+                            content = []
+                            total_bytes = 0
+                            for chunk in r.iter_content(chunk_size=1024, decode_unicode=True):
+                                if chunk:
+                                    content.append(chunk)
+                                    total_bytes += len(chunk.encode('utf-8') if hasattr(chunk, 'encode') else chunk)
+                                    if total_bytes >= 100 * 1024:  # Cap at 100KB
+                                        break
+                            js_text = "".join(content)
+                except Exception as stream_exc:
+                    logger.debug("JS streaming failed [%s]: %s", js_url, stream_exc)
                     continue
-                js_text = resp.text
+
+                if not js_text:
+                    continue
 
                 # Private IP patterns
                 for pat in _PRIVATE_IP_PATTERNS:
                     for match in pat.finditer(js_text):
                         ip = match.group(0)
-                        key = (ip, "javascript")
-                        if key in seen:
+                        if ip in seen:
                             continue
-                        seen.add(key)
+                        seen.add(ip)
                         start = max(0, match.start() - 50)
                         end = min(len(js_text), match.end() + 50)
                         snippet = js_text[start:end].replace("\n", " ").strip()
@@ -379,10 +376,9 @@ def _scan_javascript(
                 for pat in _JS_INTERNAL_URL_PATTERNS:
                     for match in pat.finditer(js_text):
                         endpoint = match.group(0)
-                        key = (endpoint, "javascript")
-                        if key in seen:
+                        if endpoint in seen:
                             continue
-                        seen.add(key)
+                        seen.add(endpoint)
                         start = max(0, match.start() - 30)
                         end = min(len(js_text), match.end() + 30)
                         snippet = js_text[start:end].replace("\n", " ").strip()
@@ -411,7 +407,7 @@ def _scan_javascript(
 def _scan_json_apis(
     urls: List[str],
     request_manager: Any,
-    seen: Set[Tuple[str, str]],
+    seen: Set[str],
 ) -> List[Dict[str, Any]]:
     """Inspect JSON responses for leaked private IPs."""
     findings: List[Dict[str, Any]] = []
@@ -436,10 +432,9 @@ def _scan_json_apis(
                         match = pat.search(value)
                         if match:
                             ip = match.group(0)
-                            key = (ip, "json")
-                            if key in seen:
+                            if ip in seen:
                                 continue
-                            seen.add(key)
+                            seen.add(ip)
                             findings.append(_build_finding(
                                 url=url,
                                 parameter="api_response",
@@ -457,22 +452,22 @@ def _scan_json_apis(
                     hostname_match = _INTERNAL_HOSTNAME_PATTERN.search(value)
                     if hostname_match:
                         hn = hostname_match.group(0)
-                        key = (hn, "json")
-                        if key not in seen:
-                            seen.add(key)
-                            findings.append(_build_finding(
-                                url=url,
-                                parameter="api_response",
-                                evidence=(
-                                    f"Hostname '{hn}' at JSON path '{path}': "
-                                    f"{value[:100]}"
-                                ),
-                                description=(
-                                    f"Internal hostname '{hn}' leaked in "
-                                    f"JSON API response from {url} "
-                                    f"(path: {path})."
-                                ),
-                            ))
+                        if hn in seen:
+                            continue
+                        seen.add(hn)
+                        findings.append(_build_finding(
+                            url=url,
+                            parameter="api_response",
+                            evidence=(
+                                f"Hostname '{hn}' at JSON path '{path}': "
+                                f"{value[:100]}"
+                            ),
+                            description=(
+                                f"Internal hostname '{hn}' leaked in "
+                                f"JSON API response from {url} "
+                                f"(path: {path})."
+                            ),
+                        ))
             except Exception as exc:
                 logger.debug("JSON scan error [%s]: %s", url, exc)
     except Exception as exc:
