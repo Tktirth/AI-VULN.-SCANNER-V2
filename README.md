@@ -139,6 +139,23 @@ docker run -d -p 8501:8501 --name vuln-scanner ai-vuln-scanner
 
 The application will be available at `http://localhost:8501`.
 
+### Cloud Deployment via GitHub Actions (GCP Cloud Run)
+
+This repository includes an automated CI/CD pipeline (`.github/workflows/cloud-run-deploy.yml`) that deploys the application to Google Cloud Run automatically whenever changes are pushed to the `main` branch.
+
+**Setup Instructions:**
+1. Create a Service Account in your Google Cloud project (`web-vulnarebility-scanner`).
+2. Grant it the following roles:
+   - Cloud Run Admin (`roles/run.admin`)
+   - Cloud Build Service Account (`roles/cloudbuild.builds.builder`)
+   - Artifact Registry Administrator (`roles/artifactregistry.admin`)
+   - Service Account User (`roles/iam.serviceAccountUser`)
+3. Generate a JSON key for this Service Account.
+4. Go to your GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions** -> **New repository secret**.
+5. Name the secret `GCP_CREDENTIALS` and paste the entire JSON key as the value.
+
+Once configured, pushing code to `main` will automatically build and deploy the app to Cloud Run.
+
 ### Usage
 
 1. **Enter target URL** in the main input field
