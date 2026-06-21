@@ -66,6 +66,18 @@ def detect_idor(
     return vulns
 
 
+from bs4 import BeautifulSoup
+
+def _are_doms_different(html1: str, html2: str) -> bool:
+    try:
+        soup1 = BeautifulSoup(html1, "html.parser")
+        soup2 = BeautifulSoup(html2, "html.parser")
+        tags1 = [t.name for t in soup1.find_all() if t.name]
+        tags2 = [t.name for t in soup2.find_all() if t.name]
+        return tags1 != tags2
+    except Exception:
+        return html1 != html2
+
 def _test_query_params(
     url: str,
     auth_rm,
@@ -100,20 +112,25 @@ def _test_query_params(
 
             try:
                 auth_resp = auth_rm.get(test_url)
-                if not auth_resp or auth_resp.status_code not in (200, 201):
+                if not auth_resp:
                     continue
 
-                # Check if content changed meaningfully (different object returned)
-                content_diff = abs(len(auth_resp.text) - len(baseline.text))
-                if content_diff < CONTENT_DIFF_THRESHOLD:
+                # 401/403 response on fuzzed ID does NOT produce a finding
+                if auth_resp.status_code in (401, 403):
+                    continue
+
+                if auth_resp.status_code not in (200, 201):
+                    continue
+
+                # Replace content length comparison with structural DOM comparison
+                if not _are_doms_different(auth_resp.text, baseline.text):
                     continue
 
                 # If we have an unauth session, compare access
                 if unauth_rm:
                     unauth_resp = unauth_rm.get(test_url)
                     if unauth_resp and unauth_resp.status_code == 200:
-                        unauth_diff = abs(len(unauth_resp.text) - len(auth_resp.text))
-                        if unauth_diff < CONTENT_DIFF_THRESHOLD:
+                        if not _are_doms_different(unauth_resp.text, auth_resp.text):
                             # Unauth can see the same content as auth — definite IDOR
                             vulns.append(_build_idor_vuln(
                                 url=url,
@@ -123,7 +140,7 @@ def _test_query_params(
                                 fuzzed_id=fuzzed_id,
                                 evidence=(
                                     f"Unauthenticated session accessed resource "
-                                    f"'{param_name}={fuzzed_id}' — same content as authenticated session"
+                                    f"'{param_name}={fuzzed_id}' — same structural DOM content as authenticated session"
                                 ),
                                 confirmed=True,
                             ))
@@ -138,7 +155,7 @@ def _test_query_params(
                     fuzzed_id=fuzzed_id,
                     evidence=(
                         f"Changing '{param_name}' from '{original_value}' to '{fuzzed_id}' "
-                        f"returned different content ({content_diff} byte diff) — "
+                        f"returned structurally different DOM response — "
                         f"possible unauthorized object access"
                     ),
                     confirmed=False,
@@ -182,18 +199,23 @@ def _test_path_segments(
 
             try:
                 auth_resp = auth_rm.get(test_url)
-                if not auth_resp or auth_resp.status_code not in (200, 201):
+                if not auth_resp:
                     continue
 
-                content_diff = abs(len(auth_resp.text) - len(baseline.text))
-                if content_diff < CONTENT_DIFF_THRESHOLD:
+                # 401/403 response on fuzzed ID does NOT produce a finding
+                if auth_resp.status_code in (401, 403):
+                    continue
+
+                if auth_resp.status_code not in (200, 201):
+                    continue
+
+                if not _are_doms_different(auth_resp.text, baseline.text):
                     continue
 
                 if unauth_rm:
                     unauth_resp = unauth_rm.get(test_url)
                     if unauth_resp and unauth_resp.status_code == 200:
-                        unauth_diff = abs(len(unauth_resp.text) - len(auth_resp.text))
-                        if unauth_diff < CONTENT_DIFF_THRESHOLD:
+                        if not _are_doms_different(unauth_resp.text, auth_resp.text):
                             vulns.append(_build_idor_vuln(
                                 url=url,
                                 test_url=test_url,
@@ -202,7 +224,7 @@ def _test_path_segments(
                                 fuzzed_id=fuzzed_id,
                                 evidence=(
                                     f"Unauthenticated access to path ID '{fuzzed_id}' "
-                                    f"returned same content as authenticated session"
+                                    f"returned same structural DOM content as authenticated session"
                                 ),
                                 confirmed=True,
                             ))
@@ -216,7 +238,7 @@ def _test_path_segments(
                     fuzzed_id=fuzzed_id,
                     evidence=(
                         f"Path ID changed from '{original_id}' → '{fuzzed_id}', "
-                        f"response content differs by {content_diff} bytes"
+                        f"response returned structurally different DOM"
                     ),
                     confirmed=False,
                 ))
@@ -226,6 +248,7 @@ def _test_path_segments(
                 logger.debug(f"IDOR path test error [{test_url}]: {e}")
 
     return vulns
+
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
