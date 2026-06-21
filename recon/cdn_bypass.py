@@ -90,7 +90,7 @@ def _safe_resolve(hostname: str) -> Optional[str]:
 class CDNBypassFinder:
     """Attempts to locate origin-server IPs hidden behind a CDN."""
 
-    def find_origin(self, domain: str, is_behind_cdn: bool = True) -> Dict[str, Any]:
+    def find_origin(self, domain: str, is_behind_cdn: bool = True, cdn_detected: bool = True) -> Dict[str, Any]:
         """Run all passive bypass techniques against *domain*.
 
         Parameters
@@ -100,6 +100,8 @@ class CDNBypassFinder:
         is_behind_cdn:
             Set to ``False`` to short-circuit — the return dict will note
             that bypass is unnecessary.
+        cdn_detected:
+            Alternative name for is_behind_cdn to short-circuit.
 
         Returns
         -------
@@ -119,7 +121,7 @@ class CDNBypassFinder:
             "cdn_bypass_note": None,
         }
 
-        if not is_behind_cdn:
+        if not is_behind_cdn or not cdn_detected:
             result["cdn_bypass_note"] = (
                 "Target not behind CDN — no bypass needed"
             )
