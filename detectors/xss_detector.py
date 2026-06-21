@@ -250,9 +250,19 @@ def _build_form_data(form) -> Dict[str, str]:
 
 
 def _is_reflected(payload: str, body: str) -> bool:
+    import html
     if payload in body:
         return True
+    
+    # Check if unescaped payload matches in unescaped body
+    unescaped_payload = html.unescape(payload)
+    unescaped_body = html.unescape(body)
+    if unescaped_payload in unescaped_body:
+        return True
+        
     for pattern in XSS_REFLECTION_PATTERNS:
         if re.search(pattern, body, re.IGNORECASE | re.DOTALL):
+            return True
+        if re.search(pattern, unescaped_body, re.IGNORECASE | re.DOTALL):
             return True
     return False
