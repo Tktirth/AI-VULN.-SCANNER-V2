@@ -4,7 +4,7 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    STREAMLIT_SERVER_PORT=8501 \
+    STREAMLIT_SERVER_PORT=8080 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
 # Create a non-root user and group
@@ -37,10 +37,10 @@ RUN chown -R scanner_user:scanner_user /app
 USER scanner_user
 
 # Expose Streamlit port
-EXPOSE 8501
+EXPOSE 8080
 
 # Healthcheck to verify the app is running
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+HEALTHCHECK CMD curl --fail http://localhost:8080/_stcore/health || exit 1
 
 # Command to run the application
 CMD ["streamlit", "run", "app.py"]
