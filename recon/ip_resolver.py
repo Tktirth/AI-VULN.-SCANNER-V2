@@ -70,6 +70,51 @@ CDN_HEADER_SIGNATURES: Dict[str, List[tuple]] = {
 }
 
 
+class SSRFGuardError(Exception):
+    """Raised when target resolves to a private IP (SSRF prevention)."""
+    pass
+
+
+def resolve_target(domain_or_url: str, request_manager: Any) -> Dict[str, Any]:
+    """
+    Validates the target URL/domain to prevent SSRF before running lookup.
+    Raises SSRFGuardError if the target resolves to a private/internal IP address.
+    """
+    from urllib.parse import urlparse
+    import ipaddress
+
+    if "://" in domain_or_url:
+        parsed = urlparse(domain_or_url)
+        domain = parsed.hostname or ""
+    else:
+        domain = domain_or_url
+
+    # Resolve target DNS to check for private IPs
+    try:
+        addr_infos = socket.getaddrinfo(domain, None)
+        seen = set()
+        for family, _type, _proto, _canon, sockaddr in addr_infos:
+            ip_str = sockaddr[0]
+            if ip_str in seen:
+                continue
+            seen.add(ip_str)
+            
+            ip = ipaddress.ip_address(ip_str)
+            if (
+                ip.is_private or
+                ip.is_loopback or
+                ip.is_link_local or
+                ip.is_multicast or
+                ip.is_unspecified
+            ):
+                raise SSRFGuardError(f"SSRF Blocked: Target {domain_or_url} resolves to private/reserved IP {ip_str}")
+    except socket.gaierror as exc:
+        logger.debug("DNS resolution failed in SSRF check: %s", exc)
+
+    resolver = IPResolver()
+    return resolver.resolve(domain, request_manager)
+
+
 class IPResolver:
     """Resolves a domain to IPs, performs ASN lookup, and detects CDN usage."""
 
