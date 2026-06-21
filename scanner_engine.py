@@ -15,6 +15,9 @@ from detectors.redirect_detector import detect_open_redirect
 from detectors.directory_detector import detect_directories
 from detectors.idor_detector import detect_idor
 from detectors.ip_leakage import detect_ip_leakage
+from detectors.ssrf_detector import detect_ssrf
+from detectors.csrf_detector import detect_csrf
+from detectors.path_traversal_detector import detect_path_traversal
 from ai.vulnerability_ai import VulnerabilityClassifierV2
 from utils.request_manager import RequestManager
 from recon.ip_resolver import IPResolver
@@ -185,25 +188,46 @@ class ScannerEngineV2:
         urls_to_scan = list({self.target_url} | set(crawler.get_urls_with_params()))
         urls_to_scan = urls_to_scan[:self.max_pages]
 
-        scan_phases = []
-        if self.scan_xss:
-            scan_phases.append(("xss", "XSS", detect_xss))
-        if self.scan_sqli:
-            scan_phases.append(("sqli", "SQL Injection", detect_sqli))
-        if self.scan_redirect:
-            scan_phases.append(("redirect", "Open Redirect", detect_open_redirect))
+        from concurrent.futures import ThreadPoolExecutor
 
-        for phase_key, phase_name, detector_fn in scan_phases:
-            _p(phase_key, 0.0, f"Running {phase_name} detection...")
-            phase_vulns = []
-            for i, url in enumerate(urls_to_scan):
-                _p(phase_key, (i + 1) / max(len(urls_to_scan), 1), f"{phase_name}: {url[:55]}...")
+        # Define detectors to run on each page
+        detectors = []
+        if self.scan_xss:
+            detectors.append(("XSS", detect_xss))
+        if self.scan_sqli:
+            detectors.append(("SQL Injection", detect_sqli))
+        if self.scan_redirect:
+            detectors.append(("Open Redirect", detect_open_redirect))
+        
+        # Add new detectors
+        detectors.append(("SSRF", detect_ssrf))
+        detectors.append(("CSRF", detect_csrf))
+        detectors.append(("Path Traversal", detect_path_traversal))
+
+        def scan_single_url(url: str) -> List[Dict[str, Any]]:
+            logger.info(f"[CONCURRENCY_LOG] Started scanning {url} at {time.time()}")
+            url_findings = []
+            for det_name, det_fn in detectors:
                 try:
-                    phase_vulns.extend(detector_fn(url, self.auth_rm))
+                    url_findings.extend(det_fn(url, self.auth_rm))
                 except Exception as e:
-                    logger.error(f"{phase_name} error [{url}]: {e}")
-            self.vulnerabilities.extend(phase_vulns)
-            _p(phase_key, 1.0, f"{phase_name}: {len(phase_vulns)} issues.")
+                    logger.error(f"Detector {det_name} error on {url}: {e}")
+            logger.info(f"[CONCURRENCY_LOG] Finished scanning {url} at {time.time()}")
+            return url_findings
+
+        _p("scan", 0.0, f"Running concurrent vulnerability scans on {len(urls_to_scan)} pages...")
+        
+        all_url_findings = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(scan_single_url, url) for url in urls_to_scan]
+            for i, fut in enumerate(futures):
+                try:
+                    all_url_findings.extend(fut.result())
+                    _p("scan", (i + 1) / len(urls_to_scan), f"Completed scanning {i+1}/{len(urls_to_scan)} pages.")
+                except Exception as e:
+                    logger.error(f"Error in concurrent page scan: {e}")
+
+        self.vulnerabilities.extend(all_url_findings)
 
         # ── Phase 6: Stored XSS (two-pass) ─────────────────────────────────
         if self.scan_stored_xss:

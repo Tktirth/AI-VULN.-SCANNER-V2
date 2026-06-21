@@ -2,11 +2,13 @@ import secrets
 import hashlib
 import uuid
 import os
+import asyncio
+import json
 from google.cloud import storage
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -23,6 +25,7 @@ from backend.ssrf import validate_scan_target
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
 team_router = APIRouter(prefix="/teams", tags=["teams"])
+ws_router = APIRouter(prefix="/ws", tags=["websockets"])
 project_router = APIRouter(prefix="/projects", tags=["projects"])
 target_router = APIRouter(prefix="/scan-targets", tags=["scan-targets"])
 job_router = APIRouter(prefix="/scan-jobs", tags=["scan-jobs"])
@@ -240,6 +243,11 @@ def create_job(job: JobCreate, db: Session = Depends(get_db), current_user: dict
     db.add(db_job)
     db.commit()
     db.refresh(db_job)
+
+    # Trigger Celery background task
+    from backend.tasks import run_scan_job
+    run_scan_job.delay(str(db_job.id))
+
     return db_job
 
 @job_router.get("", response_model=List[JobResponse])
@@ -336,3 +344,54 @@ def list_api_keys(db: Session = Depends(get_db), current_user: dict = require_pe
     if current_user["role"] != "super_admin":
         return db.query(ApiKey).filter(ApiKey.organization_id == uuid.UUID(current_user["organization_id"])).all()
     return db.query(ApiKey).all()
+
+
+# --- 9. WebSockets Router ---
+@ws_router.websocket("/scan/{job_id}")
+async def scan_job_websocket(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    
+    import redis
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    r_client = redis.from_url(redis_url, decode_responses=True)
+    pubsub = r_client.pubsub()
+    channel = f"scan_progress:{job_id}"
+    pubsub.subscribe(channel)
+    
+    logger.info(f"WebSocket client connected to scan job channel: {channel}")
+    
+    try:
+        while True:
+            # Check for Redis messages
+            message = pubsub.get_message(ignore_subscribe_messages=True)
+            if message:
+                data = message["data"]
+                await websocket.send_text(data)
+                
+                # Check for completion
+                try:
+                    parsed = json.loads(data)
+                    if parsed.get("type") in ("complete", "failed"):
+                        break
+                except Exception:
+                    pass
+            
+            await asyncio.sleep(0.1)
+            
+            # Non-blocking check for client disconnect
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=0.01)
+            except asyncio.TimeoutError:
+                pass
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket client disconnected from {channel}")
+                break
+    except Exception as e:
+        logger.error(f"WebSocket error on channel {channel}: {e}")
+    finally:
+        pubsub.unsubscribe(channel)
+        pubsub.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
