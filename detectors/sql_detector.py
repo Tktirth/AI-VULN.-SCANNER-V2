@@ -48,6 +48,24 @@ def _test_url_params(url: str, request_manager) -> List[Dict[str, Any]]:
     baseline_text = baseline.text if baseline else ""
 
     for param_name in params:
+        # Boolean tested exactly ONCE per (url, parameter) combination
+        if _is_boolean_injection(param_name, params, parsed, baseline_text, request_manager):
+            vulns.append({
+                "type": "SQLi",
+                "subtype": "Boolean-based SQL Injection",
+                "url": url,
+                "parameter": param_name,
+                "payload": "1 AND 1=1 / 1 AND 1=2",
+                "method": "GET",
+                "evidence": "Response differs between true/false SQL conditions",
+                "description": (
+                    f"Boolean SQLi in parameter '{param_name}'. "
+                    "Response content varies based on injected SQL conditions."
+                ),
+                "remediation": "Parameterize all queries. Apply WAF rules.",
+            })
+            continue  # Avoid duplicate findings for the same parameter
+
         for payload in SQL_PAYLOADS[:8]:
             test_params = {k: v[0] for k, v in params.items()}
             test_params[param_name] = payload
@@ -55,10 +73,30 @@ def _test_url_params(url: str, request_manager) -> List[Dict[str, Any]]:
                 f"{parsed.scheme}://{parsed.netloc}"
                 f"{parsed.path}?{urlencode(test_params)}"
             )
+            import time
+            start_time = time.time()
             try:
                 resp = request_manager.get(test_url)
+                duration = time.time() - start_time
                 if not resp:
                     continue
+
+                if duration >= 4.5:
+                    vulns.append({
+                        "type": "SQLi",
+                        "subtype": "Time-based SQL Injection",
+                        "url": url,
+                        "parameter": param_name,
+                        "payload": payload,
+                        "method": "GET",
+                        "evidence": f"Response took {duration:.2f}s (threshold 4.5s)",
+                        "description": (
+                            f"Time-based SQLi in parameter '{param_name}'. "
+                            "Injected SQL command caused a significant database execution delay."
+                        ),
+                        "remediation": "Use prepared statements. Restrict database functions/sleep functions.",
+                    })
+                    break
 
                 if _has_sql_error(resp.text):
                     vulns.append({
@@ -77,23 +115,6 @@ def _test_url_params(url: str, request_manager) -> List[Dict[str, Any]]:
                             "Use parameterized queries. "
                             "Disable verbose DB errors in production."
                         ),
-                    })
-                    break
-
-                if _is_boolean_injection(param_name, params, parsed, baseline_text, request_manager):
-                    vulns.append({
-                        "type": "SQLi",
-                        "subtype": "Boolean-based SQL Injection",
-                        "url": url,
-                        "parameter": param_name,
-                        "payload": payload,
-                        "method": "GET",
-                        "evidence": "Response differs between true/false SQL conditions",
-                        "description": (
-                            f"Boolean SQLi in parameter '{param_name}'. "
-                            "Response content varies based on injected SQL conditions."
-                        ),
-                        "remediation": "Parameterize all queries. Apply WAF rules.",
                     })
                     break
             except Exception as e:
@@ -125,11 +146,34 @@ def _test_forms(url: str, request_manager) -> List[Dict[str, Any]]:
             for field in form_data:
                 for payload in SQL_PAYLOADS[:5]:
                     test_data = {**form_data, field: payload}
+                    import time
+                    start_time = time.time()
                     try:
                         if method == "POST":
                             r = request_manager.post(form_url, data=test_data)
                         else:
                             r = request_manager.get(form_url, params=test_data)
+                        duration = time.time() - start_time
+                        if not r:
+                            continue
+
+                        if duration >= 4.5:
+                            vulns.append({
+                                "type": "SQLi",
+                                "subtype": "Form-based Time SQL Injection",
+                                "url": form_url,
+                                "parameter": field,
+                                "payload": payload,
+                                "method": method,
+                                "evidence": f"Response took {duration:.2f}s",
+                                "description": (
+                                    f"Time-based SQL injection in form field '{field}'. "
+                                    "Database execution delayed by form input."
+                                ),
+                                "remediation": "Parameterize all queries. Apply WAF rules.",
+                            })
+                            break
+
                         if r and _has_sql_error(r.text):
                             vulns.append({
                                 "type": "SQLi",
