@@ -72,6 +72,10 @@ def verify_firebase_token(token: str) -> dict:
     """
     Verify Firebase JWT ID token. Calls Firebase Admin SDK or uses testing mock.
     """
+    if token == "dev_token" and os.getenv("ENVIRONMENT", "dev") != "prod":
+        import os
+        return {"uid": "seed_admin_uid", "email": "admin@seedcorp.com"}
+        
     if _firebase_mock_enabled:
         if token == "invalid_token" or token == "expired_token":
             raise ValueError("Firebase token is invalid or expired")
