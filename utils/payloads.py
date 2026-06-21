@@ -8,6 +8,7 @@ XSS_PAYLOADS = [
     "<img src=x onerror=alert('XSS')>",
     "'\"><script>alert(1)</script>",
     "<svg onload=alert(1)>",
+    "&lt;script&gt;alert(1)&lt;/script&gt;",
     "javascript:alert(1)",
     "<body onload=alert('XSS')>",
     '"><img src=x onerror=prompt(1)>',
