@@ -1,0 +1,70 @@
+steps:
+  # 1. Run Python test suite (if tests fail, the build fails and terminates)
+  - name: 'python:3.11-slim'
+    id: 'run-tests'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install -r requirements.txt -r backend/requirements.txt
+        python -m pytest backend/tests/
+
+  # 2. Build and push backend Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-image'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/backend:$COMMIT_SHA', '-f', 'backend/Dockerfile', '.']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-image'
+    args: ['push', 'gcr.io/$PROJECT_ID/backend:$COMMIT_SHA']
+
+  # 3. Run Alembic Database Migrations via Cloud Run Job
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'run-migrations'
+    entrypoint: 'gcloud'
+    args:
+      - 'beta'
+      - 'run'
+      - 'jobs'
+      - 'update'
+      - 'scanner-migration-dev'
+      - '--image=gcr.io/$PROJECT_ID/backend:$COMMIT_SHA'
+      - '--region=us-central1'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'execute-migrations'
+    entrypoint: 'gcloud'
+    args:
+      - 'beta'
+      - 'run'
+      - 'jobs'
+      - 'execute'
+      - 'scanner-migration-dev'
+      - '--region=us-central1'
+      - '--wait'
+
+  # 4. Deploy Backend API to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-api'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'scanner-api-dev'
+      - '--image=gcr.io/$PROJECT_ID/backend:$COMMIT_SHA'
+      - '--region=us-central1'
+      - '--platform=managed'
+
+  # 5. Deploy Backend Worker to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-worker'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'scanner-worker-dev'
+      - '--image=gcr.io/$PROJECT_ID/backend:$COMMIT_SHA'
+      - '--region=us-central1'
+      - '--platform=managed'
+
+images:
+  - 'gcr.io/$PROJECT_ID/backend:$COMMIT_SHA'
