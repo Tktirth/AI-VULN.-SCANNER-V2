@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  scanner-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-vuln-scanner:latest
+    container_name: vuln-scanner
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G

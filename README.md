@@ -120,6 +120,25 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+### Docker Deployment (Recommended)
+
+You can run the scanner in a containerized environment using Docker.
+
+```bash
+# Clone the repository
+git clone https://github.com/Tktirth/AI-VULN.-SCANNER-V2.git
+cd AI-VULN.-SCANNER-V2
+
+# Build and start using Docker Compose
+docker compose up -d
+
+# Or build and run using raw Docker commands
+docker build -t ai-vuln-scanner .
+docker run -d -p 8501:8501 --name vuln-scanner ai-vuln-scanner
+```
+
+The application will be available at `http://localhost:8501`.
+
 ### Usage
 
 1. **Enter target URL** in the main input field
