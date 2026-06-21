@@ -34,6 +34,7 @@ class AuthManager:
         password: str,
         username_field: str = "username",
         password_field: str = "password",
+        post_login_check_url: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """
         Perform form-based login.
@@ -49,6 +50,7 @@ class AuthManager:
             password: Login password
             username_field: HTML input name for username (auto-detected if blank)
             password_field: HTML input name for password (auto-detected if blank)
+            post_login_check_url: Secondary URL to confirm authenticated access (optional)
 
         Returns:
             (success: bool, message: str)
@@ -93,6 +95,26 @@ class AuthManager:
 
             # Step 3: verify success
             success, reason = self._verify_login(resp, login_url, username)
+            
+            # Step 4: verify via post_login_check_url if specified
+            if success and post_login_check_url:
+                check_resp = self.rm.get(post_login_check_url)
+                if not check_resp:
+                    return False, f"Post-login check failed: could not reach {post_login_check_url}"
+                
+                check_url = check_resp.url if hasattr(check_resp, "url") else ""
+                check_path = urlparse(check_url).path.lower() if check_url else ""
+                login_path = urlparse(login_url).path.lower()
+                
+                if (
+                    check_resp.status_code in (401, 403) or
+                    check_resp.status_code != 200 or
+                    (login_path and login_path in check_path)
+                ):
+                    return False, f"Post-login verification failed at {post_login_check_url}. Status: {check_resp.status_code}"
+                
+                return True, f"Login succeeded (verified via {post_login_check_url})."
+                
             return success, reason
 
         except Exception as e:
