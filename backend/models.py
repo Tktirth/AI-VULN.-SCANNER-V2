@@ -9,7 +9,8 @@ from sqlalchemy import (
     Enum,
     JSON,
     event,
-    text
+    text,
+    Index
 )
 from sqlalchemy.dialects.postgresql import UUID
 from backend.database import Base
@@ -39,6 +40,8 @@ class User(Base):
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=True
     )
+    
+Index("ix_users_firebase_uid", User.firebase_uid)
 
 class Team(Base):
     __tablename__ = "teams"
@@ -103,6 +106,10 @@ class Finding(Base):
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False
     )
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+Index("ix_findings_scan_job_id", Finding.scan_job_id)
+Index("ix_findings_org_id_created_at", Finding.organization_id, Finding.created_at)
 
 class ApiKey(Base):
     __tablename__ = "api_keys"

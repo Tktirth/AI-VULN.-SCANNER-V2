@@ -113,6 +113,14 @@ def run_scan_job(self, job_id_str: str):
             "message": f"Scan completed successfully with {len(findings)} findings."
         }))
         logger.info(f"ScanJob {job_id_str} successfully completed.")
+        
+        # Publish custom cloud metric
+        try:
+            from backend.monitoring import record_scan_completion
+            record_scan_completion()
+        except Exception as e:
+            logger.error(f"Failed to record cloud metric: {e}")
+            
         return True
 
     except SoftTimeLimitExceeded:

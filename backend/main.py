@@ -10,6 +10,7 @@ from backend import database
 from backend.logging_config import setup_logging
 from backend.middleware import (
     RequestIdMiddleware,
+    RateLimitMiddleware,
     global_exception_handler,
     http_exception_handler
 )
@@ -37,8 +38,24 @@ app = FastAPI(
     redoc_url=None
 )
 
-# Add middleware for X-Request-ID tracking
+# Add middleware for X-Request-ID tracking and Rate Limiting
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestIdMiddleware)
+
+@app.on_event("startup")
+def run_migrations():
+    try:
+        from alembic import command
+        from alembic.config import Config
+        import logging
+        logging.info("Running Alembic migrations on startup...")
+        # Assume alembic.ini is in the same directory as we run uvicorn
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+        logging.info("Alembic migrations completed successfully.")
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to run Alembic migrations: {e}")
 
 # Register custom global exception handlers returning RFC 7807 problem details
 app.add_exception_handler(Exception, global_exception_handler)

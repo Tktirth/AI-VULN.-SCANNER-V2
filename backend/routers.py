@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -47,6 +47,11 @@ class OrgResponse(BaseModel):
     id: uuid.UUID
     name: str
     created_at: datetime
+    
+    @field_serializer('created_at')
+    def serialize_dt(self, dt: datetime, _info):
+        return dt.isoformat() + "Z" if dt else None
+
     class Config:
         from_attributes = True
 
@@ -108,8 +113,17 @@ class FindingResponse(BaseModel):
     sla_deadline: datetime
     scan_job_id: uuid.UUID
     organization_id: uuid.UUID
+    
+    @field_serializer('sla_deadline')
+    def serialize_dt(self, dt: datetime, _info):
+        return dt.isoformat() + "Z" if dt else None
+
     class Config:
         from_attributes = True
+
+class FindingPageResponse(BaseModel):
+    items: List[FindingResponse]
+    next_cursor: Optional[str]
 
 class ApiKeyCreate(BaseModel):
     organization_id: str
@@ -119,12 +133,21 @@ class ApiKeyCreateResponse(BaseModel):
     prefix: str
     plaintext_key: str
     expires_at: datetime
+    
+    @field_serializer('expires_at')
+    def serialize_dt(self, dt: datetime, _info):
+        return dt.isoformat() + "Z" if dt else None
 
 class ApiKeyResponse(BaseModel):
     id: uuid.UUID
     prefix: str
     expires_at: datetime
     is_revoked: bool
+    
+    @field_serializer('expires_at')
+    def serialize_dt(self, dt: datetime, _info):
+        return dt.isoformat() + "Z" if dt else None
+
     class Config:
         from_attributes = True
 
@@ -283,6 +306,28 @@ def get_job_report_url(job_id: str, db: Session = Depends(get_db), current_user:
         return {"report_url": mock_url}
 
 
+@job_router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_scan_job(job_id: str, db: Session = Depends(get_db), current_user: dict = require_permission("scan:write")):
+    job = db.query(ScanJob).filter(ScanJob.id == uuid.UUID(job_id)).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Scan job not found")
+    if current_user["role"] != "super_admin" and str(job.organization_id) != current_user["organization_id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    job.status = "cancelled"
+    db.commit()
+    
+    # Attempt to revoke Celery task
+    try:
+        from backend.tasks import celery_app
+        from celery.app.control import Control
+        Control(celery_app).revoke(job_id, terminate=True, signal="SIGTERM")
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to revoke celery task {job_id}: {e}")
+        
+    return None
+
 # --- 7. Findings Router ---
 @finding_router.post("", response_model=FindingResponse, status_code=status.HTTP_201_CREATED)
 def create_finding(finding: FindingCreate, db: Session = Depends(get_db), current_user: dict = require_permission("finding:write")):
@@ -304,11 +349,42 @@ def create_finding(finding: FindingCreate, db: Session = Depends(get_db), curren
     db.refresh(db_finding)
     return db_finding
 
-@finding_router.get("", response_model=List[FindingResponse])
-def list_findings(db: Session = Depends(get_db), current_user: dict = require_permission("finding:read")):
+@finding_router.get("", response_model=FindingPageResponse)
+def list_findings(
+    cursor: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db), 
+    current_user: dict = require_permission("finding:read")
+):
+    import base64
+    query = db.query(Finding)
     if current_user["role"] != "super_admin":
-        return db.query(Finding).filter(Finding.organization_id == uuid.UUID(current_user["organization_id"])).all()
-    return db.query(Finding).all()
+        query = query.filter(Finding.organization_id == uuid.UUID(current_user["organization_id"]))
+        
+    if cursor:
+        try:
+            decoded = base64.b64decode(cursor).decode('utf-8')
+            created_at_str, finding_id_str = decoded.split("|")
+            dt = datetime.fromisoformat(created_at_str)
+            # Find elements older than cursor
+            query = query.filter(
+                (Finding.created_at < dt) | 
+                ((Finding.created_at == dt) & (Finding.id < uuid.UUID(finding_id_str)))
+            )
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid cursor")
+
+    # Order by newest first
+    query = query.order_by(Finding.created_at.desc(), Finding.id.desc())
+    items = query.limit(limit).all()
+    
+    next_cursor = None
+    if len(items) == limit:
+        last = items[-1]
+        raw_cursor = f"{last.created_at.isoformat()}|{str(last.id)}"
+        next_cursor = base64.b64encode(raw_cursor.encode('utf-8')).decode('utf-8')
+        
+    return {"items": items, "next_cursor": next_cursor}
 
 # --- 8. API Keys Router ---
 @api_key_router.post("", response_model=ApiKeyCreateResponse, status_code=status.HTTP_201_CREATED)
