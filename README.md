@@ -112,6 +112,29 @@ open http://localhost:8000/docs
 
 ---
 
+## 🎯 Safe Demo Targets
+To safely test the AI Vulnerability Scanner's capabilities, we recommend scanning these intentionally vulnerable (and legally safe) demo applications. **Do not scan other targets without explicit written authorization.**
+
+### 1. Acunetix VulnWeb (Highly Recommended)
+Lightning-fast PHP/ASP environments specifically built to trigger XSS, SQLi, and Path Traversal. Perfect for verifying your scanner's core logic:
+- **PHP Version:** `http://testphp.vulnweb.com/`
+- **ASP Version:** `http://testasp.vulnweb.com/`
+
+### 2. Altoro Mutual (IBM)
+A simulated banking application containing major vulnerabilities including Stored XSS and broken access controls.
+- **URL:** `http://demo.testfire.net/`
+- *(Tip: Test the Form Authentication module by passing `admin` / `admin` into the scanner's auth config!)*
+
+### 3. OWASP Broken Crystals
+A modern React-based application designed to evaluate modern web vulnerabilities (excellent for testing crawler interaction with modern DOMs and headers).
+- **URL:** `https://brokencrystals.com/`
+
+### 4. Zero Bank (Micro Focus)
+A simulated banking app with a large surface area for crawling, IDOR fuzzing, and SQLi testing.
+- **URL:** `http://zero.webappsecurity.com/`
+
+---
+
 ## ☁️ Enterprise Cloud Deployment
 
 This repository ships with full Infrastructure-as-Code (IaC) to deploy to Google Cloud Platform via **Terraform**.
