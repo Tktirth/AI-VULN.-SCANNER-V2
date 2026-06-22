@@ -18,6 +18,9 @@ from backend.routers import (
     target_router, job_router, finding_router, api_key_router,
     ws_router
 )
+from backend.analytics import analytics_router
+from backend.reports_router import reports_router
+from backend.integrations.router import integration_router
 
 # Set up structured JSON logging to stdout
 setup_logging()
@@ -51,6 +54,9 @@ app.include_router(job_router)
 app.include_router(finding_router)
 app.include_router(api_key_router)
 app.include_router(ws_router)
+app.include_router(analytics_router)
+app.include_router(reports_router)
+app.include_router(integration_router)
 
 # Health endpoint checking both PostgreSQL and Redis connectivity
 @app.get("/health", status_code=status.HTTP_200_OK)
