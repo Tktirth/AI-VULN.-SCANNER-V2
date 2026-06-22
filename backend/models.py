@@ -107,6 +107,9 @@ class Finding(Base):
         nullable=False
     )
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    status = Column(String, default="open", nullable=False) # open, confirmed, in_remediation, resolved, false_positive
+    assigned_to = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    jira_issue_key = Column(String, nullable=True)
 
 Index("ix_findings_scan_job_id", Finding.scan_job_id)
 Index("ix_findings_org_id_created_at", Finding.organization_id, Finding.created_at)

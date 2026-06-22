@@ -106,10 +106,18 @@ class FindingCreate(BaseModel):
     severity: str
     scan_job_id: str
 
+class FindingUpdate(BaseModel):
+    status: Optional[str] = None
+    assigned_to: Optional[str] = None
+    jira_issue_key: Optional[str] = None
+
 class FindingResponse(BaseModel):
     id: uuid.UUID
     title: str
     severity: str
+    status: str
+    assigned_to: Optional[uuid.UUID] = None
+    jira_issue_key: Optional[str] = None
     sla_deadline: datetime
     scan_job_id: uuid.UUID
     organization_id: uuid.UUID
@@ -385,6 +393,26 @@ def list_findings(
         next_cursor = base64.b64encode(raw_cursor.encode('utf-8')).decode('utf-8')
         
     return {"items": items, "next_cursor": next_cursor}
+
+@finding_router.patch("/{finding_id}", response_model=FindingResponse)
+def update_finding(finding_id: str, update_data: FindingUpdate, db: Session = Depends(get_db), current_user: dict = require_permission("finding:write")):
+    finding = db.query(Finding).filter(Finding.id == uuid.UUID(finding_id)).first()
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+        
+    if current_user["role"] != "super_admin" and str(finding.organization_id) != current_user["organization_id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if update_data.status is not None:
+        finding.status = update_data.status
+    if update_data.assigned_to is not None:
+        finding.assigned_to = uuid.UUID(update_data.assigned_to) if update_data.assigned_to else None
+    if update_data.jira_issue_key is not None:
+        finding.jira_issue_key = update_data.jira_issue_key
+
+    db.commit()
+    db.refresh(finding)
+    return finding
 
 # --- 8. API Keys Router ---
 @api_key_router.post("", response_model=ApiKeyCreateResponse, status_code=status.HTTP_201_CREATED)
